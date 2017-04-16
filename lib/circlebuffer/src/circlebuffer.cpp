@@ -2,12 +2,69 @@
  */
 
 #include "circlebuffer.h"
+#include "stdio.h"
+#include "stdint.h"
 
 Circlebuffer::Circlebuffer(){
   // be sure not to call anything that requires hardware be initialized here, put those in begin()
+    wrapped = false;
+    bufsize = readpos = writepos = 0;
 }
 
-bool Circlebuffer::alloc(unsigned int size){
+size_t Circlebuffer::getSize(){
+  return this->bufsize;
+}
+
+uint8_t *Circlebuffer::getBuffer(int pos){
+    return &this->_data[pos];
+}
+
+uint8_t *Circlebuffer::getWriteBuffer(){
+    return this->getBuffer(this->writepos);
+}
+
+
+uint8_t *Circlebuffer::getReadBuffer(){
+    return this->getBuffer(this->readpos);
+}
+
+int Circlebuffer::getReadAvailable(){
+    if ( this->readpos > this->writepos ){
+        return this->bufsize - this->readpos;
+    }else if ( this->readpos < this->writepos ){
+        return this->writepos - this->readpos;
+    }
+
+    return 0;
+}
+
+int Circlebuffer::getWriteAvailable(){
+    return this->bufsize - this->writepos;
+}
+
+
+int Circlebuffer::unreadByteCount(){
+    if ( this->readpos == this->writepos ){
+        return this->wrapped ? this->bufsize : 0;
+    }else if ( this->readpos > this->writepos ){
+        return ( this->bufsize-this->readpos)+this->writepos;
+    }else {
+        return this->writepos - this->readpos;
+    }
+}
+
+
+int Circlebuffer::getReadpos(){
+    return this->readpos;
+}
+
+
+int Circlebuffer::getWritepos(){
+    return this->writepos;
+}
+
+
+bool Circlebuffer::alloc(size_t size){
     this->dealloc();
 
     if ( size % 2 == 0 ) {
@@ -17,6 +74,7 @@ bool Circlebuffer::alloc(unsigned int size){
 
     return this->_data != 0;
 }
+
 
 bool Circlebuffer::dealloc(){
 
@@ -28,63 +86,85 @@ bool Circlebuffer::dealloc(){
     return false;
 }
 
-uint8_t Circlebuffer::popByte(){
-    if ( this->next() ){
-        uint8_t val = this->_data[this->readpos];
-        this->_data[this->readpos] = 0;
-        this->readpos++;
-        if ( this->readpos >= this->bufsize){
-            this->readpos = 0;
-        }
-        return val;
-    }else {
-        return 0;
+bool Circlebuffer::moveWriteHead( int amount ){
+    bool ret = false;
+    this->writepos += amount;
+    if ( this->writepos >= this->bufsize){
+        this->writepos = 0;
+        ret = true;
     }
+    if ( this->writepos >= this->readpos ){
+        this->wrapped = true;
+    }
+    return ret;
 }
+
+bool Circlebuffer::moveReadHead( int amount ){
+    bool ret = false;
+    this->readpos += amount;
+    if ( this->readpos >= this->bufsize){
+        this->readpos = 0;
+        ret = true;
+    }
+    if ( this->readpos >= this->writepos ){
+        this->wrapped = false;
+    }
+    return ret;
+}
+
+uint8_t Circlebuffer::popByte(){
+    uint8_t val = this->_data[this->readpos];
+    this->moveReadHead(1);
+    return val;
+}
+
 
 uint16_t Circlebuffer::popShort(){
     if ( this->next() ){
-        uint8_t sb = this->_data[this->readpos];
-        uint8_t ib = this->_data[this->readpos+1];
+        uint8_t ib = this->_data[this->readpos];
+        uint8_t sb = this->_data[this->readpos+1];
         this->_data[this->readpos] = 0;
         this->_data[this->readpos+1] = 0;
         uint16_t val = ( sb << 8 ) + ib;
-        this->readpos=2;
-        if ( this->readpos >= this->bufsize){
-            this->readpos = 0;
-        }
+        this->moveReadHead(2);
         return val;
     }else {
         return 0;
     }
 }
 
+
 bool Circlebuffer::next(){
-    return this->readpos != this->writepos;
+    return this->wrapped || this->readpos != this->writepos;
 }
 
-void Circlebuffer::pushByte( uint8_t val ){
+
+bool Circlebuffer::pushByte( uint8_t val ){
     this->_data[ this->writepos ] = val;
     this->writepos++;
     if ( this->writepos >= this->bufsize ){
         this->writepos = 0;
+        if ( this->writepos == this->readpos ){
+            this->wrapped = true;
+            return true;
+        }
     }
+    return false;
 }
 
-void Circlebuffer::pushBytes( uint8_t *vals , int len){
 
-    for ( int i = 0; i < len;i++ ){
-        pushByte( vals[i] );
-    }
-
-}
-
-void Circlebuffer::pushShort ( uint16_t val ){
+bool Circlebuffer::pushShort ( uint16_t val ){
     this->_data[ this->writepos ] = val & 0xFF;
     this->_data[ this->writepos+1 ] = (val >> 8);
 
     this->writepos+=2;
     if ( this->writepos >= this->bufsize ){
         this->writepos = 0;
+        if ( this->writepos == this->readpos ){
+            this->wrapped = true;
+            return true;
+        }
     }
+
+    return false;
 }

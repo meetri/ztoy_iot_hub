@@ -1,27 +1,32 @@
+#include <circlebuffer.h>
+
 #define MICROPHONE_PIN A5
-#define AUDIO_INPUT_BUFFER_MAX 2048
-#define AUDIO_BUFFER_MAX 1024
+#define AUDIO_INPUT_BUFFER_MAX 512
+#define AUDIO_BUFFER_MAX 2048
+#define MAX_PACKET_SIZE 1024
 #define LED1 D7
 #define BTN1 D1
 #define SPEAKER_PIN DAC1
 
-//#include "circlebuffer.h"
 
 IPAddress server = IPAddress(192,168,86,179);
 int servicePort = 50050;
 
 UDP *socket;
+TCPClient *tcpsocket;
 
 //Stream In
-uint8_t udpInBuffer[AUDIO_INPUT_BUFFER_MAX+2];
-int lastWritePos = 0,lastReadPos = 0;
+Circlebuffer speakerBuffer;
+Circlebuffer micBuffer;
 unsigned long lastRead;
 
 
 //Stream Out
+/*
 uint8_t udpBuffer[AUDIO_BUFFER_MAX];
-unsigned long stopFrame = 0;
 int audioIdx = 0;
+*/
+unsigned long stopFrame = 0;
 unsigned long lastReadOut;
 
 
@@ -31,57 +36,67 @@ void setup() {
     pinMode(LED1,OUTPUT);
     pinMode(BTN1,INPUT_PULLDOWN);
     pinMode(SPEAKER_PIN,OUTPUT);
-    
+
     socket = new UDP();
-    
+    tcpsocket = new TCPClient();
+
+
     //while(!Serial.available()) Particle.process();
-    
+
     while (!WiFi.ready()) Particle.process();
+
     socket->begin( servicePort );
-    if (!socket->setBuffer(1024)){
+    if (!socket->setBuffer(MAX_PACKET_SIZE)){
         Serial.println("problem setting socket buffer");
     }
-    
+
+    speakerBuffer.alloc( AUDIO_INPUT_BUFFER_MAX );
+    micBuffer.alloc( AUDIO_BUFFER_MAX );
+
     lastRead = micros();
     lastReadOut = micros();
-    
-    
+
 }
 
 
 void loop() {
-    
+
     if (WiFi.ready()) {
-        
-        recieveFromUdp();
-        playBuffer();
-        
+
         if ( digitalRead(BTN1) == HIGH ){
+            if ( !tcpsocket->connected() ){
+                Serial.println("Attempting to create TCP connection");
+                tcpsocket->connect( server , servicePort );
+            }    
             digitalWrite(LED1,HIGH);
             Serial.println("generating 100ms audio frame");
-            listenAndSend(100);
+            listenAndSend(200,&micBuffer);
             stopFrame = millis() + 100;
         }else {
+            if ( tcpsocket->connected() ){
+                Serial.println("disconnecting tcp connection");
+                tcpsocket->stop();
+            }    
             digitalWrite(LED1,LOW);
             if ( stopFrame > 0 && millis() > stopFrame ){
                 stopFrame = 0;
-                sendStopFrame();
+                Serial.println("sending stop frame");
+                sendStopFrame(&micBuffer);
             }
+
+            recieveAndPlay( &speakerBuffer); 
+
         }
-        
+
     }
-    
+
 }
 
-void playBuffer() {
-    
+void playBuffer( Circlebuffer *buf ) {
+
     bool b = false;
-    while ( lastReadPos != lastWritePos ){
+    while ( buf->next() ){
         b = true;
-        if ( lastReadPos >= AUDIO_INPUT_BUFFER_MAX){
-            lastReadPos = 0;
-        }
-        
         unsigned long time = micros();
         if (lastRead > time) {
             // time wrapped? how does this happen?
@@ -89,75 +104,76 @@ void playBuffer() {
             Serial.println("time quake - time just looped over itself.");
             lastRead = time;
         }
-        
+
         //125 microseconds is 1/8000th of a second
-        if ((time - lastRead) > 125) {
+        int dif = time-lastRead;
+        if ( dif >= 125) {
             lastRead = time;
-            lastReadPos += play16BitFrame( lastReadPos );
+            play8BitFrame(buf);
         }
-        
+
     }
-    
+
     if ( b ){
         Serial.println("Played audio sample");
     }
-    
+
     //shut off speaker...
     if ( micros() - lastRead > 1000 ){
         analogWrite(SPEAKER_PIN, 0 );
     }
-    
+
 }
 
-int play16BitFrame(int pos){
-    uint8_t b1 = udpInBuffer[pos];
-    uint8_t b2 = udpInBuffer[pos+1];
-    int val = (b2 << 8) + b1;
+int play16BitFrame( Circlebuffer *buf ){
+    int val = buf->popShort();
     val = map(val,0,65535,0,4095);
     analogWrite(SPEAKER_PIN, val );
-    return 2; 
+    return 2;
 }
 
-int play8BitFrame( int pos ){
-    analogWrite(SPEAKER_PIN, map(udpInBuffer[lastReadPos],0,255,0,4095) );
-    return 1; 
+int play8BitFrame(Circlebuffer *buf){
+    uint8_t val = buf->popByte();
+    analogWrite(SPEAKER_PIN, map(val,0,255,0,4095) );
+    return 1;
 }
 
-void recieveFromUdp(){
-    
-    if ( socket->parsePacket() ){
-        
+void recieveAndPlay( Circlebuffer *buf ){
+
+    while ( socket->parsePacket() ){
+
         int avail = socket->available();
         if ( avail > 0 ){
-            
-            if ( lastWritePos >= AUDIO_INPUT_BUFFER_MAX ) {
-                lastWritePos = 0;
-            }
-            
-            int buflen = AUDIO_INPUT_BUFFER_MAX - lastWritePos;
+
+            int buflen = buf->getWriteAvailable();
             if (avail < buflen ){
                 buflen = avail;
             }
-            
-            int received = socket->read( &udpInBuffer[lastWritePos], buflen );
-            //Serial.print("Received ");
-            //Serial.println(received);
-            lastWritePos += received;
-            
+
+            int received = socket->read( buf->getWriteBuffer(), buflen );
+            if ( buf->moveWriteHead(received) ){
+                playBuffer( buf );
+            }
+            Serial.print("Received ");
+            Serial.println(received);
         }
-        
+
     }
-    
+
+    playBuffer( buf );
+
 }
 
 // ------------------------------------------------------------------------------------------
 // STREAM FROM MICROPHONE
 // ---------------------------------
 
-void listenAndSend(int delay) {
-    bool full = false;
-    while ( !full ){
-        
+void listenAndSend(int delay, Circlebuffer *buf ) {
+    int numframes = delay * 1000 / 125 ;
+    int frames = 0;
+    int dif = 0;
+    while ( frames < numframes ){
+
         unsigned long time = micros();
         if (lastReadOut > time) {
             // time wrapped? how does this happen?
@@ -165,47 +181,84 @@ void listenAndSend(int delay) {
             Serial.println("time quake - time just looped over itself.");
             lastReadOut = time;
         }
-        
+
         //125 microseconds is 1/8000th of a second
-        if ((time - lastReadOut) > 125) {
+        int dif = time-lastReadOut;
+        if ( dif >= 125) {
             lastReadOut = time;
-            full = readMic16();
+            if ( readMic(buf) ) {
+                sendAudio(buf);
+            }
+            frames++;
         }
-        
+
     }
-    
-    sendAudio();
-    
+
+    sendAudio(buf);
+
 }
 
 
-bool readMic16(void) {
+bool readMic16(Circlebuffer *buf) {
     uint16_t value = map(analogRead(MICROPHONE_PIN),0,4096,0,65535);
-    udpBuffer[audioIdx] = value & 0xff;
-    udpBuffer[audioIdx+1] = (value >> 8);
-    audioIdx+=2;
-    return audioIdx >= AUDIO_BUFFER_MAX;
+    return buf->pushShort( value );
 }
 
-bool readMic(void) {
-    udpBuffer[audioIdx++] = map(analogRead(MICROPHONE_PIN),0,4096,0,255);
-    return audioIdx >= AUDIO_BUFFER_MAX;
+bool readMic(Circlebuffer *buf) {
+    uint8_t value = map(analogRead(MICROPHONE_PIN),0,4096,0,255);
+    return buf->pushByte( value );
 }
 
-void sendStopFrame(void){
-    memset(udpBuffer, '\0', AUDIO_BUFFER_MAX );
-    int sent = socket->sendPacket(udpBuffer,100,server,servicePort);
+void sendStopFrame(Circlebuffer *buf){
+    socket->sendPacket(buf->getBuffer(0),100,server,servicePort);
 }
+
+void writeTcpSocket ( Circlebuffer *buf ){
+
+    if (tcpsocket->connected() ){
+        int written = 0;
+        while ( buf->next() ){
+            int r = tcpsocket->write( buf->getReadBuffer() , buf->getReadAvailable() );
+            buf->moveReadHead(r);
+            written += r;
+        }
+        Serial.print("Wrote ");
+        Serial.print(written);
+        Serial.println(" to TCP");
+    }else {
+        Serial.print("Unable to establish TCP connection");
+    }
+}
+
+void writeSocket( Circlebuffer *buf ) {
+
+    int written = 0;
+    bool sockopen = false;
+    while ( buf->next() ){
+        if ( sockopen == false ){
+            socket->beginPacket( server, servicePort );
+            sockopen = true;
+            written = 0;
+        }
+        written += socket->write( buf->getReadBuffer() ,1);
+        buf->moveReadHead(1);
+        if ( written == MAX_PACKET_SIZE ){
+            socket->endPacket();
+            sockopen = false;
+        }
+
+    }
+    if ( sockopen == true ){
+        socket->endPacket();
+        sockopen = false;
+    }
+
+}
+
 
 // Callback for Timer 1
-void sendAudio(void) {
-    writeSocket(udpBuffer);
+void sendAudio( Circlebuffer *buf) {
+    //writeSocket( buf );
+    writeTcpSocket( buf );
 }
 
-void writeSocket(uint8_t *buffer) {
-    int sent = socket->sendPacket(buffer,audioIdx,server,servicePort);
-    audioIdx = 0;
-}
-    
-
-    
