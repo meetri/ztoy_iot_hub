@@ -1,13 +1,17 @@
 #include <circlebuffer.h>
 
 #define MICROPHONE_PIN A5
-#define AUDIO_INPUT_BUFFER_MAX 256
+#define MAX_PACKET_SIZE 1024
+#define AUDIO_INPUT_BUFFER_MAX 2048
 #define AUDIO_BUFFER_MAX 4096
 #define LED1 D7
 #define BTN1 D1
 #define SPEAKER_PIN DAC1
+#define SEND_OVER_TCP 1
 
+UDP *udpsocket;
 TCPClient *tcpsocket;
+
 IPAddress server = IPAddress(192,168,86,179);
 int servicePort = 50050;
 
@@ -17,6 +21,8 @@ Circlebuffer micBuffer;
 unsigned long lastRead;
 unsigned long lastReadOut;
 
+unsigned long stopFrame;
+
 void setup() {
     Serial.begin(115200);
 
@@ -24,7 +30,15 @@ void setup() {
     pinMode(BTN1,INPUT_PULLDOWN);
     pinMode(SPEAKER_PIN,OUTPUT);
 
-    tcpsocket = new TCPClient();
+    if ( SEND_OVER_TCP == 1 ){
+        tcpsocket = new TCPClient();
+    }else {
+        udpsocket = new UDP();
+        udpsocket->begin( servicePort );
+        if (!udpsocket->setBuffer( MAX_PACKET_SIZE ) ){
+            Serial.println("problem setting udp socket buffer");
+        }
+    }
 
     while (!WiFi.ready()) Particle.process();
 
@@ -44,17 +58,27 @@ void loop() {
         if ( digitalRead(BTN1) == HIGH ){
 
             digitalWrite(LED1,HIGH);
-            if ( !tcpsocket->connected() ){
+            if ( SEND_OVER_TCP && !tcpsocket->connected() ){
                 Serial.print("*");
                 tcpsocket->connect( server , servicePort );
             }    
 
             Serial.print(".");
             listenAndSend(200,&micBuffer);
+            Serial.print("*");
+            stopFrame = millis() + 100;
 
         }else {
 
             digitalWrite(LED1,LOW);
+            if ( SEND_OVER_TCP == 0 ){
+                if ( stopFrame > 0 && millis() > stopFrame ){
+                    stopFrame = 0;
+                    Serial.println("sending stop frame");
+                    sendStopFrame(&micBuffer);
+                }
+            }
+
             recieveAndPlay( &speakerBuffer); 
 
         }
@@ -80,7 +104,8 @@ void playBuffer( Circlebuffer *buf ) {
         int dif = time-lastRead;
         if ( dif >= 125) {
             lastRead = time;
-            play8BitFrame(buf);
+            //play8BitFrame(buf);
+            play16BitFrame(buf);
         }
 
     }
@@ -109,17 +134,31 @@ int play8BitFrame(Circlebuffer *buf){
     return 1;
 }
 
-void recieveAndPlay( Circlebuffer *buf ){
 
-    bool ret = false;
+void recieveAndPlayUDP( Circlebuffer *buf ){
+
+   while ( udpsocket->parsePacket() ){
+        int avail = udpsocket->available();
+        if ( avail > 0 ){
+
+            int buflen = buf->getWriteAvailable();
+            int received = udpsocket->read( buf->getWriteBuffer(), buflen );
+            if ( buf->moveWriteHead(received) ){
+                playBuffer( buf );
+            }
+            Serial.print("Received ");
+            Serial.println(received);
+        }
+    }
+
+    playBuffer( buf );
+
+}
+
+void recieveAndPlayTCP( Circlebuffer *buf ){
     int avail = tcpsocket->available();
     while ( avail > 0 ){
-        ret = true;
         int buflen = buf->getWriteAvailable();
-        if (avail < buflen ){
-            buflen = avail;
-        }
-
         int received = tcpsocket->read( buf->getWriteBuffer(), buflen );
         if ( buf->moveWriteHead(received) ){
             playBuffer( buf );
@@ -130,6 +169,15 @@ void recieveAndPlay( Circlebuffer *buf ){
     }
 
     playBuffer( buf );
+}
+
+void recieveAndPlay( Circlebuffer *buf ){
+
+    if ( SEND_OVER_TCP == 1 ){
+        recieveAndPlayTCP(buf);
+    }else {
+        recieveAndPlayUDP(buf);
+    }
 
 }
 
@@ -191,6 +239,36 @@ void writeTcpSocket ( Circlebuffer *buf ){
     }
 }
 
+void writeUdpSocket ( Circlebuffer *buf ){
+
+    int written = 0;
+    bool sockopen = false;
+    while ( buf->next() ){
+
+        if ( sockopen == false ){
+            udpsocket->beginPacket( server, servicePort );
+            sockopen = true;
+            written = 0;
+        }
+
+        int r = udpsocket->write( buf->getReadBuffer() , buf->getReadAvailable() );
+        buf->moveReadHead(r);
+        written += r;
+
+        if ( written == MAX_PACKET_SIZE ){
+            udpsocket->endPacket();
+            sockopen = false;
+        }
+
+    }
+
+    if ( sockopen == true ){
+        udpsocket->endPacket();
+        sockopen = false;
+    }
+
+}
+
 int sendAudioFrame( Circlebuffer *buf, int numbytes ) {
     if (tcpsocket->connected() ){
         if ( buf->next() ){
@@ -201,6 +279,14 @@ int sendAudioFrame( Circlebuffer *buf, int numbytes ) {
 }
 
 void sendAudio( Circlebuffer *buf) {
-    writeTcpSocket( buf );
+    if ( SEND_OVER_TCP == 1 ){
+        writeTcpSocket( buf );
+    }else {
+        writeUdpSocket( buf );
+    }
 }
 
+
+void sendStopFrame(Circlebuffer *buf){
+    udpsocket->sendPacket(buf->getBuffer(0),100,server,servicePort);
+}
