@@ -18,6 +18,7 @@ public:
   
   uint8_t popByte();
   uint16_t popShort();
+  int16_t popSignedShort();
 
   bool pushByte( uint8_t val );
   bool pushShort( uint16_t val );

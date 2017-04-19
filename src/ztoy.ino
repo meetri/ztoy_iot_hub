@@ -2,8 +2,8 @@
 
 #define MICROPHONE_PIN A5
 #define MAX_PACKET_SIZE 1024
-#define AUDIO_INPUT_BUFFER_MAX 1024
-#define AUDIO_BUFFER_MAX 2048
+#define SPEAKER_BUFFER_SIZE 1024
+#define MICROPHONE_BUFFER_SIZE 2048
 #define LED1 D7
 #define BTN1 D1
 #define SPEAKER_PIN DAC1
@@ -31,20 +31,11 @@ void setup() {
     pinMode(BTN1,INPUT_PULLDOWN);
     pinMode(SPEAKER_PIN,OUTPUT);
 
-    if ( SEND_OVER_TCP == 1 ){
-        tcpsocket = new TCPClient();
-    }else {
-        udpsocket = new UDP();
-        udpsocket->begin( servicePort );
-        if (!udpsocket->setBuffer( MAX_PACKET_SIZE ) ){
-            Serial.println("problem setting udp socket buffer");
-        }
-    }
-
+    tcpsocket = new TCPClient();
     while (!WiFi.ready()) Particle.process();
 
-    speakerBuffer.alloc( AUDIO_INPUT_BUFFER_MAX );
-    micBuffer.alloc( AUDIO_BUFFER_MAX );
+    speakerBuffer.alloc( SPEAKER_BUFFER_SIZE );
+    micBuffer.alloc( MICROPHONE_BUFFER_SIZE );
 
     lastRead = micros();
     lastReadOut = micros();
@@ -61,6 +52,7 @@ void loop(){
 
     if ( !ok ){
         ok = digitalRead(BTN1) == HIGH;
+        recieveAndPlay( &speakerBuffer );
     }
 
     while ( ok ) {
@@ -112,7 +104,7 @@ void playBuffer( Circlebuffer *buf ) {
         if ( dif >= 125) {
             lastRead = time;
             //play8BitFrame(buf);
-            play16BitFrame(buf);
+            playUnsigned16BitFrame(buf);
         }
 
     }
@@ -126,6 +118,13 @@ void playBuffer( Circlebuffer *buf ) {
         analogWrite(SPEAKER_PIN, 0 );
     }
 
+}
+
+int playUnsigned16BitFrame( Circlebuffer *buf ){
+    int val = buf->popSignedShort();
+    val = map(val,-32768,32768,0,4095);
+    analogWrite(SPEAKER_PIN, val );
+    return 2;
 }
 
 int play16BitFrame( Circlebuffer *buf ){

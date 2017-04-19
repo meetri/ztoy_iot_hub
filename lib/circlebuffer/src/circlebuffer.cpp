@@ -120,7 +120,6 @@ uint8_t Circlebuffer::popByte(){
     return val;
 }
 
-
 uint16_t Circlebuffer::popShort(){
     if ( this->next() ){
         uint8_t ib = this->_data[this->readpos];
@@ -128,6 +127,20 @@ uint16_t Circlebuffer::popShort(){
         this->_data[this->readpos] = 0;
         this->_data[this->readpos+1] = 0;
         uint16_t val = ( sb << 8 ) + ib;
+        this->moveReadHead(2);
+        return val;
+    }else {
+        return 0;
+    }
+}
+
+int16_t Circlebuffer::popSignedShort(){
+    if ( this->next() ){
+        uint8_t ib = this->_data[this->readpos];
+        uint8_t sb = this->_data[this->readpos+1];
+        this->_data[this->readpos] = 0;
+        this->_data[this->readpos+1] = 0;
+        int16_t val = ( sb << 8 ) + ib;
         this->moveReadHead(2);
         return val;
     }else {
