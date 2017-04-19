@@ -2,12 +2,13 @@
 
 #define MICROPHONE_PIN A5
 #define MAX_PACKET_SIZE 1024
-#define AUDIO_INPUT_BUFFER_MAX 2048
-#define AUDIO_BUFFER_MAX 4096
+#define AUDIO_INPUT_BUFFER_MAX 1024
+#define AUDIO_BUFFER_MAX 2048
 #define LED1 D7
 #define BTN1 D1
 #define SPEAKER_PIN DAC1
 #define SEND_OVER_TCP 1
+#define BEATDELAY 500000
 
 UDP *udpsocket;
 TCPClient *tcpsocket;
@@ -50,40 +51,46 @@ void setup() {
 
 }
 
+unsigned long lastsample = 0;
+unsigned long lastbeat = 0;
+bool ok = false;
 
-void loop() {
+int ms = 125;
 
-    if (WiFi.ready()) {
+void loop(){
 
-        if ( digitalRead(BTN1) == HIGH ){
+    if ( !ok ){
+        ok = digitalRead(BTN1) == HIGH;
+    }
 
-            digitalWrite(LED1,HIGH);
-            if ( SEND_OVER_TCP && !tcpsocket->connected() ){
-                Serial.print("*");
-                tcpsocket->connect( server , servicePort );
-            }    
+    while ( ok ) {
 
-            Serial.print(".");
-            listenAndSend(200,&micBuffer);
-            Serial.print("*");
-            stopFrame = millis() + 100;
+        unsigned long beat = micros();
 
-        }else {
-
-            digitalWrite(LED1,LOW);
-            if ( SEND_OVER_TCP == 0 ){
-                if ( stopFrame > 0 && millis() > stopFrame ){
-                    stopFrame = 0;
-                    Serial.println("sending stop frame");
-                    sendStopFrame(&micBuffer);
+        if ( beat - lastbeat > BEATDELAY ){
+            ok = false;
+            lastbeat = beat;
+            if ( WiFi.ready() && digitalRead(BTN1) == HIGH ) {
+                if ( !tcpsocket->connected() ){
+                    if ( tcpsocket->connect( server , servicePort ) ){
+                        Serial.println("connected");
+                        ok = true;
+                    }
+                }else {
+                    Serial.println("still connected");
+                    ok = true;
                 }
             }
-
-            recieveAndPlay( &speakerBuffer); 
-
         }
 
+        if ( beat - lastsample > 125 ){
+            if ( readMic16( &micBuffer ) ){
+                sendAudio( &micBuffer );
+            }
+            lastsample = beat;
+        }
     }
+
 
 }
 
@@ -185,57 +192,19 @@ void recieveAndPlay( Circlebuffer *buf ){
 // STREAM FROM MICROPHONE
 // ---------------------------------
 
-void listenAndSend(int delay, Circlebuffer *buf ) {
-    int numframes = delay * 1000 / 125 ;
-    int frames = 0;
-    int dif = 0;
-    uint8_t lv = 0;
-    while ( frames < numframes ){
-
-        unsigned long time = micros();
-        if (lastReadOut > time) {
-            lastReadOut = time;
-        }
-
-        //125 microseconds is 1/8000th of a second
-        int dif = time-lastReadOut;
-        if ( dif < 125 ){
-            delayMicroseconds(125-dif);
-        }
-
-        lastReadOut = micros();
-        if ( readMic(buf) ){
-            sendAudio(buf);
-        }
-
-        frames++;
-
-    }
-    
-    sendAudio(buf);
-
-}
-
-
 bool readMic16(Circlebuffer *buf) {
-    uint16_t value = map(analogRead(MICROPHONE_PIN),0,4096,0,65535);
-    return buf->pushShort( value );
+    return buf->pushShort( map(analogRead(MICROPHONE_PIN),0,4096,0,65535) );
+
 }
 
 uint8_t readMic(Circlebuffer *buf) {
-    uint8_t value = map(analogRead(MICROPHONE_PIN),0,4096,0,255);
-    return buf->pushByte( value );
+    return buf->pushByte( map(analogRead(MICROPHONE_PIN),0,4096,0,255) );
 }
 
 void writeTcpSocket ( Circlebuffer *buf ){
-
-    if (tcpsocket->connected() ){
-        int written = 0;
-        while ( buf->next() ){
-            int r = tcpsocket->write( buf->getReadBuffer() , buf->getReadAvailable() );
-            buf->moveReadHead(r);
-            written += r;
-        }
+    while ( buf->next() ){
+        int r = tcpsocket->write( buf->getReadBuffer() , buf->getReadAvailable());
+        buf->moveReadHead(r);
     }
 }
 
@@ -267,15 +236,6 @@ void writeUdpSocket ( Circlebuffer *buf ){
         sockopen = false;
     }
 
-}
-
-int sendAudioFrame( Circlebuffer *buf, int numbytes ) {
-    if (tcpsocket->connected() ){
-        if ( buf->next() ){
-            buf->moveReadHead(tcpsocket->write( buf->getReadBuffer() , numbytes ));
-            return numbytes;
-        }
-    }
 }
 
 void sendAudio( Circlebuffer *buf) {

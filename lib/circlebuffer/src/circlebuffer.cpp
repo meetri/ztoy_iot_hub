@@ -33,6 +33,8 @@ int Circlebuffer::getReadAvailable(){
         return this->bufsize - this->readpos;
     }else if ( this->readpos < this->writepos ){
         return this->writepos - this->readpos;
+    }else if ( this->wrapped && this->writepos == this->readpos ){
+        return this->bufsize;
     }
 
     return 0;
