@@ -5,7 +5,7 @@
 #define SPEAKER_BUFFER_SIZE 1024
 #define MICROPHONE_BUFFER_SIZE 2048
 #define LED1 D7
-#define BTN1 D1
+#define BTN1 D5
 #define SPEAKER_PIN DAC1
 #define SEND_OVER_TCP 1
 #define BEATDELAY 500000
@@ -47,12 +47,60 @@ unsigned long lastbeat = 0;
 bool ok = false;
 
 int ms = 125;
+double silentThreshold = 0;
+int pages = 0;
+
+
+
+double getAmbiantNoiseAverage(unsigned int sampleWindow){
+
+    unsigned long startMillis= millis();  // Start of sample window
+    unsigned int peakToPeak = 0;   // peak-to-peak level
+
+    unsigned int signalMax = 0;
+    unsigned int signalMin = 4096;
+
+    unsigned int sample;
+
+    // collect data for 50 mS
+    while (millis() - startMillis < sampleWindow)
+    {
+        sample = analogRead(MICROPHONE_PIN);
+        if (sample < 4096)  // toss out spurious readings
+        {
+            if (sample > signalMax)
+            {
+                signalMax = sample;  // save just the max levels
+            }
+            else if (sample < signalMin)
+            {
+                signalMin = sample;  // save just the min levels
+            }
+        }
+    }
+    peakToPeak = signalMax - signalMin;  // max - min = peak-peak amplitude
+//double volts = (peakToPeak * 5.0) / 1024;  // convert to volts
+    double volts = (peakToPeak * 5.0) / 4096;  // convert to volts
+    
+    return volts;
+}
 
 void loop(){
 
+
     if ( !ok ){
+
+        if ( recieveAndPlay( &speakerBuffer ) ) {
+            analogWrite(SPEAKER_PIN,  0 );
+        }
+
+        /*
+        double threshold = getAmbiantNoiseAverage(50);
+        if ( threshold > 1.0 ){
+            ok = true;
+            Serial.println("Recording Mic");
+        }*/
         ok = digitalRead(BTN1) == HIGH;
-        recieveAndPlay( &speakerBuffer );
     }
 
     while ( ok ) {
@@ -62,7 +110,9 @@ void loop(){
         if ( beat - lastbeat > BEATDELAY ){
             ok = false;
             lastbeat = beat;
+            double threshold = getAmbiantNoiseAverage(50);
             if ( WiFi.ready() && digitalRead(BTN1) == HIGH ) {
+            //if ( WiFi.ready() && threshold >= 0.1 ) {
                 if ( !tcpsocket->connected() ){
                     if ( tcpsocket->connect( server , servicePort ) ){
                         Serial.println("connected");
@@ -72,6 +122,8 @@ void loop(){
                     Serial.println("still connected");
                     ok = true;
                 }
+            }else {
+                Serial.println("Stopped recording");
             }
         }
 
@@ -82,7 +134,6 @@ void loop(){
             lastsample = beat;
         }
     }
-
 
 }
 
@@ -141,9 +192,11 @@ int play8BitFrame(Circlebuffer *buf){
 }
 
 
-void recieveAndPlayUDP( Circlebuffer *buf ){
+bool recieveAndPlayUDP( Circlebuffer *buf ){
 
-   while ( udpsocket->parsePacket() ){
+    bool ret = false;
+    while ( udpsocket->parsePacket() ){
+        ret = true;
         int avail = udpsocket->available();
         if ( avail > 0 ){
 
@@ -159,11 +212,15 @@ void recieveAndPlayUDP( Circlebuffer *buf ){
 
     playBuffer( buf );
 
+    return ret;
+
 }
 
-void recieveAndPlayTCP( Circlebuffer *buf ){
+bool recieveAndPlayTCP( Circlebuffer *buf ){
+    bool ret = false;
     int avail = tcpsocket->available();
     while ( avail > 0 ){
+        ret = true;
         int buflen = buf->getWriteAvailable();
         int received = tcpsocket->read( buf->getWriteBuffer(), buflen );
         if ( buf->moveWriteHead(received) ){
@@ -175,14 +232,15 @@ void recieveAndPlayTCP( Circlebuffer *buf ){
     }
 
     playBuffer( buf );
+    return ret;
 }
 
-void recieveAndPlay( Circlebuffer *buf ){
+bool recieveAndPlay( Circlebuffer *buf ){
 
     if ( SEND_OVER_TCP == 1 ){
-        recieveAndPlayTCP(buf);
+        return recieveAndPlayTCP(buf);
     }else {
-        recieveAndPlayUDP(buf);
+        return recieveAndPlayUDP(buf);
     }
 
 }
