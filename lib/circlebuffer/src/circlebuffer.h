@@ -1,4 +1,4 @@
-
+#pragma once
 
 /* circlebuffer library by Demetrius Bell
  */
