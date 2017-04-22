@@ -15,6 +15,7 @@ public:
   bool playBuffer();
   void sendAudio();
   bool recieveAndPlay();
+  void turnOffSpeaker();
 
   int playSigned16BitFrame();
   int play16BitFrame();

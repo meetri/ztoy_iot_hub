@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <circlebuffer.h>
 #include <rawplayer.h>
+#include <ztoyhub.h>
 
 #define MICROPHONE_PIN A5
 #define MAX_PACKET_SIZE 1024
@@ -24,6 +25,7 @@ int servicePort = 50050;
 
 TCPClient *tcpsocket;
 Rawplayer *player;
+Ztoyhub *ztoy;
 
 Circlebuffer speakerBuffer;
 Circlebuffer micBuffer;
@@ -45,13 +47,19 @@ void setup() {
     micBuffer.alloc( MICROPHONE_BUFFER_SIZE );
 
     tcpsocket = new TCPClient();
+
+    ztoy = new Ztoyhub();
+    ztoy->begin( tcpsocket );
+
     player = new Rawplayer();
     player->begin( tcpsocket, speakerBuffer, SPEAKER_PIN );
+
 
     display.display();
     delay(250);
 
     display.clearDisplay();
+
 
 }
 
@@ -71,14 +79,27 @@ void loop(){
     if ( !ok ){
 
         if ( tcpsocket->available() > 0 ){
-            display.clearDisplay();
-            display.setTextSize(1);
-            display.setTextColor(WHITE);
-            display.setCursor(0,0);
-            display.println("Status: Playing Stream");
-            display.display();
-            if (player->recieveAndPlay()){
-                digitalWrite(SPEAKER_PIN,0);
+            ztoy->recieveHeader();
+            if ( ztoy->getHeaderCode() == ZTOY_16BITAUDIO){
+                Serial.print("16bit audio stream playback - ");
+                display.clearDisplay();
+                display.setTextSize(1);
+                display.setTextColor(WHITE);
+                display.setCursor(0,32);
+                display.println(ztoy->getHeaderMessage());
+                display.setCursor(0,0);
+                display.println("Status: Idle");
+                display.print("Volts: ");
+                display.println( silentThreshold );
+                display.display();
+                if (player->recieveAndPlay()){
+                    Serial.println("speaker off");
+                    //player->turnOffSpeaker();
+                }else {
+                    Serial.println("not found");
+                }
+            }else {
+                Serial.println("unknown ztoyhub command");
             }
         }
 
@@ -90,12 +111,14 @@ void loop(){
             display.setTextSize(1);
             display.setTextColor(WHITE);
             display.setCursor(0,0);
-            display.println("Status: Stream Recording");
+            display.println("Status: Recording");
             display.display();
         }else {
             display.clearDisplay();
             display.setTextSize(1);
             display.setTextColor(WHITE);
+            display.setCursor(0,32);
+            display.println(ztoy->getHeaderMessage());
             display.setCursor(0,0);
             display.println("Status: Idle");
             display.print("Volts: ");
@@ -116,6 +139,7 @@ void loop(){
                 if ( !tcpsocket->connected() ){
                     if ( tcpsocket->connect( server , servicePort ) ){
                         Serial.println("connected");
+                        sendIotHubMessage(8);
                         ok = true;
                     }
                 }else {
@@ -124,6 +148,12 @@ void loop(){
                 }
             }else {
                 Serial.println("Stopped recording");
+                display.clearDisplay();
+                display.setTextSize(1);
+                display.setTextColor(WHITE);
+                display.setCursor(0,0);
+                display.println("status: Waiting...");
+                display.display();
             }
         }
 
@@ -135,6 +165,38 @@ void loop(){
         }
     }
 
+}
+
+char *recieveHeader (){
+
+    uint8_t header[10];
+    tcpsocket->read(header, sizeof(header) );
+    if ( header[0] == 0 && header[1] == 255 ){
+        uint8_t ib = header[2];
+        uint8_t sb = header[3];
+
+        //size of character message after header
+        uint16_t val = ( sb << 8 ) + ib;
+        char  *msg  = new char[val];
+        int idx = 0;
+        while ( val > 0 ){
+            uint8_t buf[10];
+            int r = tcpsocket->read(buf,sizeof(buf));
+            val-= r;
+
+            for (int i = 0;i < r;i++){
+                msg[idx++] = (char) buf[i];
+            }
+        }
+
+
+        Serial.print("msg = ");
+        Serial.println(msg);
+
+        return msg;
+    }
+
+    return "";
 }
 
 double getAmbiantNoiseAverage(unsigned int sampleWindow){
@@ -190,6 +252,27 @@ void writeTcpSocket ( Circlebuffer *buf){
         buf->moveReadHead(r);
     }
 }
+
+int sendIotHubMessage( uint8_t cmd ){
+
+    char *msg = "testing";
+    uint8_t buf[] = {0,255,cmd,0,0,0,0,0,0,0};
+    unsigned int len = sizeof(msg);
+    int sent = 0;
+
+    buf[3] = len & 0xFF;
+    buf[4] = (len >> 8);
+
+    sent += tcpsocket->write( buf , sizeof(buf));
+    sent += tcpsocket->println(msg);
+
+    Serial.print("Sent ");
+    Serial.print(sent);
+    Serial.println(" bytes");
+    return sent;
+
+}
+
 
 void sendAudio( Circlebuffer *buf) {
         writeTcpSocket( buf );

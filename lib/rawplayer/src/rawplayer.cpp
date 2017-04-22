@@ -14,6 +14,7 @@ void Rawplayer::begin( TCPClient *tcpclient , Circlebuffer buf, int speakerpin )
     this->buffer = buf;
     this->speakerPin = speakerpin;
     this->client = tcpclient;
+    this->lastRead = micros();
 
     pinMode(this->speakerPin,OUTPUT);
     Serial.println("rawplay initialized");
@@ -25,7 +26,7 @@ bool Rawplayer::playBuffer() {
     while ( this->buffer.next() ){
         b = true;
         unsigned long time = micros();
-        if (lastRead > time) {
+        if (this->lastRead > time) {
             // time wrapped? how does this happen?
             //lets just skip a beat for now, whatever.
             Serial.println("time quake - time just looped over itself.");
@@ -37,13 +38,12 @@ bool Rawplayer::playBuffer() {
         if ( dif >= 125) {
             this->lastRead = time;
             //play8BitFrame(buf);
-            this->playSigned16BitFrame();
+            this->play16BitFrame();
         }
 
     }
 
     if ( b ){
-        //Serial.println("Played audio sample");
         return true;
     }
 
@@ -74,11 +74,16 @@ int Rawplayer::play8BitFrame(){
     return 1;
 }
 
+void Rawplayer::turnOffSpeaker(){
+    analogWrite(this->speakerPin,0);
+}
+
 
 bool Rawplayer::recieveAndPlay(){
     bool ret = false;
     int avail = this->client->available();
     
+    Serial.println("recieve and play");
     while ( avail > 0 ){
         ret = true;
         int buflen = this->buffer.getWriteAvailable();
