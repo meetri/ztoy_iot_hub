@@ -167,6 +167,21 @@ bool Circlebuffer::pushByte( uint8_t val ){
     return false;
 }
 
+bool Circlebuffer::pushSignedShort ( int16_t val ){
+    this->_data[ this->writepos ] = val & 0xFF;
+    this->_data[ this->writepos+1 ] = (val >> 8);
+
+    this->writepos+=2;
+    if ( this->writepos >= this->bufsize ){
+        this->writepos = 0;
+        if ( this->writepos == this->readpos ){
+            this->wrapped = true;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 bool Circlebuffer::pushShort ( uint16_t val ){
     this->_data[ this->writepos ] = val & 0xFF;

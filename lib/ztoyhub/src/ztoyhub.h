@@ -14,6 +14,7 @@ public:
 
   void begin( TCPClient *client );
   void recieveHeader();
+  void clearMessage();
   uint16_t getHeaderCode();
   char *getHeaderMessage();
 

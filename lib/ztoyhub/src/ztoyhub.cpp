@@ -22,6 +22,10 @@ char *Ztoyhub::getHeaderMessage(){
     return this->header_message;
 }
 
+void Ztoyhub::clearMessage(){
+    this->header_message = "";
+    this->header_msgcode = 0;
+}
 
 void Ztoyhub::recieveHeader()
 {

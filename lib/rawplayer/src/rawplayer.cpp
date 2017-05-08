@@ -35,7 +35,7 @@ bool Rawplayer::playBuffer() {
 
         //125 microseconds is 1/8000th of a second
         int dif = time-this->lastRead;
-        if ( dif >= 125) {
+        if ( dif >= 62) {
             this->lastRead = time;
             //play8BitFrame(buf);
             this->play16BitFrame();
@@ -75,6 +75,9 @@ int Rawplayer::play8BitFrame(){
 }
 
 void Rawplayer::turnOffSpeaker(){
+    analogWrite(this->speakerPin,0);
+    analogWrite(this->speakerPin,0);
+    analogWrite(this->speakerPin,0);
     analogWrite(this->speakerPin,0);
 }
 

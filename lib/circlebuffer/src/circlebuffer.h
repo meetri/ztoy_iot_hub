@@ -22,6 +22,7 @@ public:
 
   bool pushByte( uint8_t val );
   bool pushShort( uint16_t val );
+  bool pushSignedShort( int16_t val );
 
   bool next();
   int getReadpos();

@@ -30,8 +30,9 @@ Ztoyhub *ztoy;
 Circlebuffer speakerBuffer;
 Circlebuffer micBuffer;
 
-
 void setup() {
+
+    Particle.disconnect();
     Serial.begin(115200);
 
     pinMode(LED1,OUTPUT);
@@ -54,12 +55,13 @@ void setup() {
     player = new Rawplayer();
     player->begin( tcpsocket, speakerBuffer, SPEAKER_PIN );
 
-
     display.display();
     delay(250);
 
     display.clearDisplay();
-
+    //setADCSampleTime(ADC_SampleTime_144Cycles);
+    setADCSampleTime(ADC_SampleTime_84Cycles);
+    player->turnOffSpeaker();
 
 }
 
@@ -70,7 +72,6 @@ unsigned long lastsample = 0;
 unsigned long lastbeat = 0;
 bool ok = false;
 
-int ms = 125;
 double silentThreshold = 0;
 int pages = 0;
 
@@ -94,7 +95,7 @@ void loop(){
                 display.display();
                 if (player->recieveAndPlay()){
                     Serial.println("speaker off");
-                    //player->turnOffSpeaker();
+                    player->turnOffSpeaker();
                 }else {
                     Serial.println("not found");
                 }
@@ -107,6 +108,7 @@ void loop(){
         ok = digitalRead(BTN1) == HIGH;
 
         if ( ok ){
+            ztoy->clearMessage();
             display.clearDisplay();
             display.setTextSize(1);
             display.setTextColor(WHITE);
@@ -157,7 +159,8 @@ void loop(){
             }
         }
 
-        if ( beat - lastsample > 125 ){
+        //if ( beat - lastsample > 125 ){
+        if ( beat - lastsample > 62 ){
             if ( readMic16( &micBuffer ) ){
                 sendAudio( &micBuffer );
             }
@@ -238,6 +241,8 @@ double getAmbiantNoiseAverage(unsigned int sampleWindow){
 // ---------------------------------
 
 bool readMic16(Circlebuffer *buf) {
+    
+    //uint16_t v1 = static_cast<uint16_t>( ads.readADC_SingleEnded(0) );
     return buf->pushShort( map(analogRead(MICROPHONE_PIN),0,4096,0,65535) );
 
 }
